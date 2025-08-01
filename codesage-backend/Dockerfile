@@ -1,12 +1,14 @@
-# Use a slim, official OpenJDK base image
+# Use slim official OpenJDK base image
 FROM openjdk:17-slim
 
-# Set the working directory inside the container
+# Set working directory inside the container
 WORKDIR /app
 
-# Copy the user's Java source file into the container
-COPY Main.java .
+# Copy the jar file into the container
+COPY target/codesage-backend-0.0.1-SNAPSHOT.jar app.jar
 
-# Compile the java code and then execute it.
-# This command is run when the container starts.
-CMD ["sh", "-c", "javac Main.java && java Main"]
+# Expose the port your Spring Boot app runs on
+EXPOSE 8080
+
+# Run the Spring Boot application
+ENTRYPOINT ["java", "-jar", "app.jar"]
