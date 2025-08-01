@@ -59,8 +59,9 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
     }
     
     public CodeWebSocketHandler() {
-        // Initializes the Docker client
+        // --- CORRECTED: Use the default Docker configuration for Render (Linux environment) ---
         DefaultDockerClientConfig config = DefaultDockerClientConfig.createDefaultConfigBuilder().build();
+        
         DockerHttpClient httpClient = new ApacheDockerHttpClient.Builder()
                 .dockerHost(config.getDockerHost())
                 .sslConfig(config.getSSLConfig())
@@ -85,7 +86,6 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
     }
 
     private void visualizeCode(WebSocketSession session, String code, String language) {
-        // --- UPDATED PROMPT FOR BEGINNER-FRIENDLY NARRATIVE ---
         String prompt = "You are a friendly and helpful programming tutor. Your task is to explain the execution of a piece of code to a beginner. "
                 + "Describe the code's journey step-by-step, as if you were telling a story. "
                 + "Your response must be a single, clean block of HTML. "
@@ -147,6 +147,9 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
                             List<Map<String, String>> parts = (List<Map<String, String>>) content.get("parts");
                             if (parts != null && !parts.isEmpty()) {
                                 String responseText = parts.get(0).get("text");
+                                if ("flow".equals(responseType)) {
+                                    responseText = responseText.replace("```mermaid", "").replace("```", "").trim();
+                                }
                                 sendMessage(session, new ResponseMessage(responseType, responseText));
                             }
                         } else {
@@ -176,7 +179,6 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
     }
 
     private void runCodeInDocker(WebSocketSession session, String code, String language) {
-        // ... (This method remains unchanged)
         if (language == null || language.trim().isEmpty()) {
             sendMessage(session, new ResponseMessage("error", "Execution failed: Language was not specified."));
             sendMessage(session, new ResponseMessage("finished", "Process exited with code 1"));
