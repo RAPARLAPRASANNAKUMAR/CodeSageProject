@@ -154,6 +154,7 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
     private void runCode(WebSocketSession session, String code, String language) throws IOException {
         if (language == null || language.trim().isEmpty()) {
             sendMessage(session, new ResponseMessage("error", "Language not specified."));
+            sendMessage(session, new ResponseMessage("finished", "Process exited with code 1"));
             return;
         }
 
@@ -214,6 +215,7 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
         } else {
             compilePb = new ProcessBuilder(compiler, sourceFile.toAbsolutePath().toString(), "-o", outputFile.toAbsolutePath().toString());
         }
+        compilePb.directory(tempDir.toFile());
         
         try {
             Process compileProcess = compilePb.start();
@@ -237,7 +239,7 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
 
         ProcessBuilder executePb = new ProcessBuilder(execCommandList);
         executePb.directory(tempDir.toFile());
-        executeProcess(session, pb, tempDir);
+        executeProcess(session, executePb, tempDir);
     }
 
     private void executeProcess(WebSocketSession session, ProcessBuilder pb, Path tempDir) {
