@@ -731,7 +731,7 @@ function CodeSageEditor() {
             ws.current.close();
         }
         
-        ws.current = new WebSocket("ws://localhost:8080/code-socket");
+        ws.current = new WebSocket("wss://codesage-backend-zy2p.onrender.com/code-socket");
 
         ws.current.onopen = onOpenCallback;
         
