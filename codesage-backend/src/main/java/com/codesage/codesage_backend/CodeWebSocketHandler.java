@@ -14,6 +14,8 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -156,8 +158,7 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
         }
 
         Path tempDir = Files.createTempDirectory("codesage-exec-");
-        ProcessBuilder pb;
-
+        
         switch (language.toLowerCase()) {
             case "python":
                 executeSimple(session, tempDir, "script.py", code, "python3", "-u");
@@ -166,7 +167,7 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
                 executeSimple(session, tempDir, "script.js", code, "node");
                 break;
             case "java":
-                executeCompiled(session, tempDir, "Main.java", code, "Main.class", "javac", "java", "-cp", ".");
+                executeCompiled(session, tempDir, "Main.java", code, "Main", "javac", "java", "-cp", ".");
                 break;
             case "c":
                 executeCompiled(session, tempDir, "script.c", code, "a.out", "gcc", "./a.out");
@@ -185,6 +186,7 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
                 break;
             default:
                 sendMessage(session, new ResponseMessage("error", "Language not supported for execution."));
+                Files.delete(tempDir);
                 return;
         }
     }
@@ -193,11 +195,10 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
         Path sourceFile = tempDir.resolve(fileName);
         Files.writeString(sourceFile, code);
 
-        String[] fullCommand = new String[command.length + 1];
-        System.arraycopy(command, 0, fullCommand, 0, command.length);
-        fullCommand[command.length] = sourceFile.toAbsolutePath().toString();
+        List<String> commandList = new ArrayList<>(Arrays.asList(command));
+        commandList.add(sourceFile.toAbsolutePath().toString());
         
-        ProcessBuilder pb = new ProcessBuilder(fullCommand);
+        ProcessBuilder pb = new ProcessBuilder(commandList);
         executeProcess(session, pb, tempDir);
     }
 
@@ -207,9 +208,11 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
         
         Path outputFile = tempDir.resolve(outputName);
 
-        ProcessBuilder compilePb = new ProcessBuilder(compiler, sourceFile.toAbsolutePath().toString(), "-o", outputFile.toAbsolutePath().toString());
-        if (language.equals("java")) { // Special case for javac
-             compilePb = new ProcessBuilder(compiler, sourceFile.toAbsolutePath().toString());
+        ProcessBuilder compilePb;
+        if (compiler.equals("javac")) {
+            compilePb = new ProcessBuilder(compiler, sourceFile.toAbsolutePath().toString());
+        } else {
+            compilePb = new ProcessBuilder(compiler, sourceFile.toAbsolutePath().toString(), "-o", outputFile.toAbsolutePath().toString());
         }
         
         try {
@@ -227,13 +230,14 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
             return;
         }
         
-        String[] execCommand = new String[execArgs.length + 1];
-        System.arraycopy(execArgs, 0, execCommand, 0, execArgs.length);
-        execCommand[execArgs.length] = (language.equals("java")) ? outputName.replace(".class", "") : outputFile.toAbsolutePath().toString();
+        List<String> execCommandList = new ArrayList<>();
+        execCommandList.add(executor);
+        execCommandList.addAll(Arrays.asList(execArgs));
+        execCommandList.add(executor.equals("node") ? outputFile.toAbsolutePath().toString() : outputName);
 
-        ProcessBuilder executePb = new ProcessBuilder(executor).command(execCommand);
-        executePb.directory(tempDir.toFile()); // Run from the temp directory
-        executeProcess(session, executePb, tempDir);
+        ProcessBuilder executePb = new ProcessBuilder(execCommandList);
+        executePb.directory(tempDir.toFile());
+        executeProcess(session, pb, tempDir);
     }
 
     private void executeProcess(WebSocketSession session, ProcessBuilder pb, Path tempDir) {
@@ -274,7 +278,7 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
                     sendMessage(session, new ResponseMessage(type, line + "\n"));
                 }
             } catch (IOException e) {
-                // This can happen when the process is killed, which is normal.
+                // This can happen when the process is killed.
             }
         }).start();
     }
@@ -282,11 +286,15 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
         System.out.println("DEBUG: WebSocket connection closed. Session ID: " + session.getId() + ", Status: " + status);
-        Process process = sessionToProcessMap.remove(session.getId());
+        cleanupSession(session.getId());
+        super.afterConnectionClosed(session, status);
+    }
+    
+    private void cleanupSession(String sessionId) {
+        Process process = sessionToProcessMap.remove(sessionId);
         if (process != null && process.isAlive()) {
             process.destroyForcibly();
         }
-        super.afterConnectionClosed(session, status);
     }
 
     private synchronized void sendMessage(WebSocketSession session, ResponseMessage message) {
