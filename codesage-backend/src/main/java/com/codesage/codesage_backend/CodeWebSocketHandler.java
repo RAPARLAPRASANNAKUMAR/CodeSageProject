@@ -1,32 +1,19 @@
 package com.codesage.codesage_backend;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.github.dockerjava.api.DockerClient;
-import com.github.dockerjava.api.async.ResultCallback;
-import com.github.dockerjava.api.command.CreateContainerResponse;
-import com.github.dockerjava.api.model.Frame;
-import com.github.dockerjava.api.model.HostConfig;
-import com.github.dockerjava.core.DefaultDockerClientConfig;
-import com.github.dockerjava.core.DockerClientImpl;
-import com.github.dockerjava.httpclient5.ApacheDockerHttpClient;
-import com.github.dockerjava.transport.DockerHttpClient;
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
-import java.io.File;
-import java.io.IOException;
+import java.io.*;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
-import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -35,8 +22,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class CodeWebSocketHandler extends TextWebSocketHandler {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
-    private final DockerClient dockerClient;
-    private final Map<String, String> sessionToContainerMap = new ConcurrentHashMap<>();
+    private final Map<String, Process> sessionToProcessMap = new ConcurrentHashMap<>();
     private final HttpClient httpClient = HttpClient.newHttpClient();
 
     static class WebSocketMessage {
@@ -57,17 +43,7 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
     }
     
     public CodeWebSocketHandler() {
-        // Use the default Docker configuration for Render (Linux environment)
-        DefaultDockerClientConfig config = DefaultDockerClientConfig.createDefaultConfigBuilder().build();
-        
-        DockerHttpClient httpClient = new ApacheDockerHttpClient.Builder()
-                .dockerHost(config.getDockerHost())
-                .sslConfig(config.getSSLConfig())
-                .maxConnections(100)
-                .connectionTimeout(Duration.ofSeconds(60))
-                .responseTimeout(Duration.ofSeconds(300))
-                .build();
-        this.dockerClient = DockerClientImpl.getInstance(config, httpClient);
+        // No Docker client initialization is needed.
     }
 
     @Override
@@ -75,7 +51,7 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
         WebSocketMessage receivedMsg = objectMapper.readValue(message.getPayload(), WebSocketMessage.class);
 
         if ("run".equals(receivedMsg.type)) {
-            runCodeInDocker(session, receivedMsg.code, receivedMsg.language);
+            runCode(session, receivedMsg.code, receivedMsg.language);
         } else if ("analyze".equals(receivedMsg.type)) {
             analyzeCode(session, receivedMsg.code, receivedMsg.language);
         } else if ("visualize".equals(receivedMsg.type)) {
@@ -145,9 +121,6 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
                             List<Map<String, String>> parts = (List<Map<String, String>>) content.get("parts");
                             if (parts != null && !parts.isEmpty()) {
                                 String responseText = parts.get(0).get("text");
-                                if ("flow".equals(responseType)) {
-                                    responseText = responseText.replace("```mermaid", "").replace("```", "").trim();
-                                }
                                 sendMessage(session, new ResponseMessage(responseType, responseText));
                             }
                         } else {
@@ -176,87 +149,142 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
         return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\b", "\\b").replace("\f", "\\f").replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t");
     }
 
-    private void runCodeInDocker(WebSocketSession session, String code, String language) {
+    private void runCode(WebSocketSession session, String code, String language) throws IOException {
         if (language == null || language.trim().isEmpty()) {
-            sendMessage(session, new ResponseMessage("error", "Execution failed: Language was not specified."));
-            sendMessage(session, new ResponseMessage("finished", "Process exited with code 1"));
+            sendMessage(session, new ResponseMessage("error", "Language not specified."));
             return;
         }
 
-        Path tempDir = null;
-        String containerId = null;
-        try {
-            tempDir = Files.createTempDirectory("codesage-docker-");
-            File buildContext = tempDir.toFile();
+        Path tempDir = Files.createTempDirectory("codesage-exec-");
+        ProcessBuilder pb;
 
-            String sourceFileName;
-            String dockerfileResourcePath;
-            switch (language.toLowerCase()) {
-                case "java": sourceFileName = "Main.java"; dockerfileResourcePath = "dockerfiles/java/Dockerfile"; break;
-                case "python": sourceFileName = "script.py"; dockerfileResourcePath = "dockerfiles/python/Dockerfile"; break;
-                case "c": sourceFileName = "script.c"; dockerfileResourcePath = "dockerfiles/c/Dockerfile"; break;
-                case "cpp": sourceFileName = "script.cpp"; dockerfileResourcePath = "dockerfiles/cpp/Dockerfile"; break;
-                case "javascript": sourceFileName = "script.js"; dockerfileResourcePath = "dockerfiles/javascript/Dockerfile"; break;
-                case "go": sourceFileName = "main.go"; dockerfileResourcePath = "dockerfiles/go/Dockerfile"; break;
-                case "rust": sourceFileName = "main.rs"; dockerfileResourcePath = "dockerfiles/rust/Dockerfile"; break;
-                case "typescript": sourceFileName = "script.ts"; dockerfileResourcePath = "dockerfiles/typescript/Dockerfile"; break;
-                default: sendMessage(session, new ResponseMessage("error", "Language not supported: " + language)); return;
-            }
-
-            Files.writeString(tempDir.resolve(sourceFileName), code);
-            ClassPathResource dockerfileResource = new ClassPathResource(dockerfileResourcePath);
-            Files.copy(dockerfileResource.getInputStream(), tempDir.resolve("Dockerfile"), StandardCopyOption.REPLACE_EXISTING);
-
-            String imageId = dockerClient.buildImageCmd(buildContext).start().awaitImageId();
-
-            HostConfig hostConfig = new HostConfig().withMemory(256L * 1024 * 1024).withCpuCount(1L);
-
-            CreateContainerResponse container = dockerClient.createContainerCmd(imageId).withHostConfig(hostConfig).exec();
-            containerId = container.getId();
-            sessionToContainerMap.put(session.getId(), containerId);
-
-            dockerClient.startContainerCmd(containerId).exec();
-
-            dockerClient.logContainerCmd(containerId).withStdOut(true).withStdErr(true).withFollowStream(true)
-                    .exec(new ResultCallback.Adapter<Frame>() {
-                        @Override
-                        public void onNext(Frame item) {
-                            sendMessage(session, new ResponseMessage("output", new String(item.getPayload())));
-                        }
-                    });
-
-            int exitCode = dockerClient.waitContainerCmd(containerId).start().awaitStatusCode();
-            sendMessage(session, new ResponseMessage("finished", "Process exited with code " + exitCode));
-            
-            dockerClient.removeContainerCmd(containerId).exec();
-            dockerClient.removeImageCmd(imageId).withForce(true).exec();
-
-        } catch (Exception e) {
-            sendMessage(session, new ResponseMessage("error", "Execution failed: " + e.getMessage()));
-            e.printStackTrace();
-        } finally {
-            sessionToContainerMap.remove(session.getId());
-            if (tempDir != null) {
-                try {
-                    Files.walk(tempDir).sorted((p1, p2) -> -p1.compareTo(p2)).forEach(p -> p.toFile().delete());
-                } catch (IOException e) {
-                   System.err.println("Failed to delete temp directory: " + tempDir);
-                }
-            }
+        switch (language.toLowerCase()) {
+            case "python":
+                executeSimple(session, tempDir, "script.py", code, "python3", "-u");
+                break;
+            case "javascript":
+                executeSimple(session, tempDir, "script.js", code, "node");
+                break;
+            case "java":
+                executeCompiled(session, tempDir, "Main.java", code, "Main.class", "javac", "java", "-cp", ".");
+                break;
+            case "c":
+                executeCompiled(session, tempDir, "script.c", code, "a.out", "gcc", "./a.out");
+                break;
+            case "cpp":
+                executeCompiled(session, tempDir, "script.cpp", code, "a.out", "g++", "./a.out");
+                break;
+            case "go":
+                executeSimple(session, tempDir, "main.go", code, "go", "run");
+                break;
+            case "rust":
+                executeCompiled(session, tempDir, "main.rs", code, "main", "rustc", "./main");
+                break;
+            case "typescript":
+                executeCompiled(session, tempDir, "script.ts", code, "script.js", "tsc", "node");
+                break;
+            default:
+                sendMessage(session, new ResponseMessage("error", "Language not supported for execution."));
+                return;
         }
+    }
+
+    private void executeSimple(WebSocketSession session, Path tempDir, String fileName, String code, String... command) throws IOException {
+        Path sourceFile = tempDir.resolve(fileName);
+        Files.writeString(sourceFile, code);
+
+        String[] fullCommand = new String[command.length + 1];
+        System.arraycopy(command, 0, fullCommand, 0, command.length);
+        fullCommand[command.length] = sourceFile.toAbsolutePath().toString();
+        
+        ProcessBuilder pb = new ProcessBuilder(fullCommand);
+        executeProcess(session, pb, tempDir);
+    }
+
+    private void executeCompiled(WebSocketSession session, Path tempDir, String sourceName, String code, String outputName, String compiler, String executor, String... execArgs) throws IOException {
+        Path sourceFile = tempDir.resolve(sourceName);
+        Files.writeString(sourceFile, code);
+        
+        Path outputFile = tempDir.resolve(outputName);
+
+        ProcessBuilder compilePb = new ProcessBuilder(compiler, sourceFile.toAbsolutePath().toString(), "-o", outputFile.toAbsolutePath().toString());
+        if (language.equals("java")) { // Special case for javac
+             compilePb = new ProcessBuilder(compiler, sourceFile.toAbsolutePath().toString());
+        }
+        
+        try {
+            Process compileProcess = compilePb.start();
+            int exitCode = compileProcess.waitFor();
+            if (exitCode != 0) {
+                String errorOutput = new String(compileProcess.getErrorStream().readAllBytes());
+                sendMessage(session, new ResponseMessage("error", "Compilation failed:\n" + errorOutput));
+                sendMessage(session, new ResponseMessage("finished", "Process exited with code " + exitCode));
+                return;
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            sendMessage(session, new ResponseMessage("error", "Compilation was interrupted."));
+            return;
+        }
+        
+        String[] execCommand = new String[execArgs.length + 1];
+        System.arraycopy(execArgs, 0, execCommand, 0, execArgs.length);
+        execCommand[execArgs.length] = (language.equals("java")) ? outputName.replace(".class", "") : outputFile.toAbsolutePath().toString();
+
+        ProcessBuilder executePb = new ProcessBuilder(executor).command(execCommand);
+        executePb.directory(tempDir.toFile()); // Run from the temp directory
+        executeProcess(session, executePb, tempDir);
+    }
+
+    private void executeProcess(WebSocketSession session, ProcessBuilder pb, Path tempDir) {
+        try {
+            Process process = pb.start();
+            sessionToProcessMap.put(session.getId(), process);
+
+            startStreamReader(session, process.getInputStream(), "output");
+            startStreamReader(session, process.getErrorStream(), "error");
+
+            new Thread(() -> {
+                try {
+                    int exitCode = process.waitFor();
+                    sendMessage(session, new ResponseMessage("finished", "Process exited with code " + exitCode));
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                } finally {
+                    cleanupSession(session.getId());
+                    try {
+                        Files.walk(tempDir).sorted((p1, p2) -> -p1.compareTo(p2)).forEach(p -> p.toFile().delete());
+                    } catch (IOException e) {
+                        System.err.println("Failed to delete temp directory: " + tempDir);
+                    }
+                }
+            }).start();
+        } catch (IOException e) {
+             sendMessage(session, new ResponseMessage("error", "Execution failed: " + e.getMessage()));
+             e.printStackTrace();
+        }
+    }
+
+
+    private void startStreamReader(WebSocketSession session, InputStream inputStream, String type) {
+        new Thread(() -> {
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    sendMessage(session, new ResponseMessage(type, line + "\n"));
+                }
+            } catch (IOException e) {
+                // This can happen when the process is killed, which is normal.
+            }
+        }).start();
     }
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
         System.out.println("DEBUG: WebSocket connection closed. Session ID: " + session.getId() + ", Status: " + status);
-        String containerId = sessionToContainerMap.remove(session.getId());
-        if (containerId != null) {
-            try {
-                System.out.println("DEBUG: Force stopping and removing container ID: " + containerId);
-                dockerClient.removeContainerCmd(containerId).withForce(true).exec();
-            } catch (Exception e) {
-                System.err.println("Error during container cleanup for session " + session.getId() + ": " + e.getMessage());
-            }
+        Process process = sessionToProcessMap.remove(session.getId());
+        if (process != null && process.isAlive()) {
+            process.destroyForcibly();
         }
         super.afterConnectionClosed(session, status);
     }
