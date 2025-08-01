@@ -1,14 +1,12 @@
-# Use slim official OpenJDK base image
-FROM openjdk:17-slim
-
-# Set working directory inside the container
+# Stage 1: Build the application
+FROM maven:3.8.5-openjdk-17 AS builder
 WORKDIR /app
+COPY . .
+RUN mvn clean package -DskipTests
 
-# Copy the jar file into the container
-COPY target/codesage-backend-0.0.1-SNAPSHOT.jar app.jar
-
-# Expose the port your Spring Boot app runs on
+# Stage 2: Run the application
+FROM openjdk:17-slim
+WORKDIR /app
+COPY --from=builder /app/target/*.jar app.jar
 EXPOSE 8080
-
-# Run the Spring Boot application
 ENTRYPOINT ["java", "-jar", "app.jar"]
