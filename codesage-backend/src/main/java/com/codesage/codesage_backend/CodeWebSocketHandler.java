@@ -25,6 +25,7 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final Map<String, Process> sessionToProcessMap = new ConcurrentHashMap<>();
+    private final Map<String, BufferedWriter> sessionToProcessInputMap = new ConcurrentHashMap<>();
     private final HttpClient httpClient = HttpClient.newHttpClient();
 
     static class WebSocketMessage {
@@ -58,6 +59,17 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
             analyzeCode(session, receivedMsg.code, receivedMsg.language);
         } else if ("visualize".equals(receivedMsg.type)) {
             visualizeCode(session, receivedMsg.code, receivedMsg.language);
+        } else if ("input".equals(receivedMsg.type)) {
+            // NEW: Handle input from the user
+            BufferedWriter writer = sessionToProcessInputMap.get(session.getId());
+            if (writer != null) {
+                try {
+                    writer.write(receivedMsg.data + "\n");
+                    writer.flush();
+                } catch (IOException e) {
+                    System.err.println("Error writing to process input stream: " + e.getMessage());
+                }
+            }
         }
     }
 
@@ -235,7 +247,7 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
         List<String> execCommandList = new ArrayList<>();
         execCommandList.add(executor);
         execCommandList.addAll(Arrays.asList(execArgs));
-        execCommandList.add(executor.equals("node") ? outputFile.toAbsolutePath().toString() : outputName);
+        execCommandList.add(executor.equals("node") ? outputFile.toAbsolutePath().toString() : outputName.replace(".class", ""));
 
         ProcessBuilder executePb = new ProcessBuilder(execCommandList);
         executePb.directory(tempDir.toFile());
@@ -246,6 +258,10 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
         try {
             Process process = pb.start();
             sessionToProcessMap.put(session.getId(), process);
+
+            // NEW: Store the process's input stream writer
+            BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(process.getOutputStream()));
+            sessionToProcessInputMap.put(session.getId(), writer);
 
             startStreamReader(session, process.getInputStream(), "output");
             startStreamReader(session, process.getErrorStream(), "error");
@@ -275,9 +291,16 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
     private void startStreamReader(WebSocketSession session, InputStream inputStream, String type) {
         new Thread(() -> {
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    sendMessage(session, new ResponseMessage(type, line + "\n"));
+                int charCode;
+                StringBuilder lineBuffer = new StringBuilder();
+                while ((charCode = reader.read()) != -1) {
+                    char character = (char) charCode;
+                    lineBuffer.append(character);
+                    // Send data immediately or when a newline is encountered
+                    if (character == '\n' || !reader.ready()) {
+                        sendMessage(session, new ResponseMessage(type, lineBuffer.toString()));
+                        lineBuffer.setLength(0); // Clear the buffer
+                    }
                 }
             } catch (IOException e) {
                 // This can happen when the process is killed.
@@ -297,6 +320,7 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
         if (process != null && process.isAlive()) {
             process.destroyForcibly();
         }
+        sessionToProcessInputMap.remove(sessionId);
     }
 
     private synchronized void sendMessage(WebSocketSession session, ResponseMessage message) {
