@@ -19,6 +19,6 @@ public class WebSocketConfig implements WebSocketConfigurer {
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
         registry.addHandler(codeWebSocketHandler, "/code-socket")
                 // This line allows your Vercel frontend to connect to your Render backend
-                .setAllowedOrigins("https://code-sage-project-hgsb-28quy7zl2.vercel.app", "http://localhost:3000");
+                .setAllowedOrigins("*");
     }
 }
