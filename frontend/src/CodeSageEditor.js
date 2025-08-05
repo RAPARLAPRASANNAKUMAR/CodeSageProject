@@ -35,24 +35,78 @@ const db = getFirestore(app);
 const styles = `
 /* ... existing styles ... */
 .input-area {
-    border-top: 1px solid var(--border-color);
-    padding: 0.5rem 1rem;
+    border-top: 2px solid var(--accent-primary);
+    padding: 0.75rem 1rem;
     display: flex;
+    background-color: var(--bg-secondary);
+    gap: 0.5rem;
+    align-items: center;
+    animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+    from {
+        transform: translateY(20px);
+        opacity: 0;
+    }
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+.input-area::before {
+    content: "Input required:";
+    color: var(--accent-primary);
+    font-weight: 600;
+    font-size: 0.875rem;
+    white-space: nowrap;
 }
 
 .input-area input {
     flex-grow: 1;
     background-color: var(--bg-primary);
-    border: 1px solid var(--border-color);
+    border: 2px solid var(--accent-primary);
     color: var(--text-primary);
-    padding: 0.5rem;
-    border-radius: 4px;
+    padding: 0.75rem;
+    border-radius: 6px;
     font-family: var(--font-mono);
+    font-size: 1rem;
+    caret-color: var(--accent-primary);
+    transition: all 0.2s ease;
 }
 
 .input-area input:focus {
     outline: none;
-    border-color: var(--accent-primary);
+    border-color: var(--accent-secondary);
+    box-shadow: 0 0 0 3px rgba(122, 162, 247, 0.2);
+    transform: scale(1.02);
+}
+
+.input-area input::placeholder {
+    color: var(--text-secondary);
+    opacity: 0.7;
+}
+
+.input-submit-btn {
+    background: linear-gradient(to right, var(--accent-secondary), var(--accent-primary));
+    border: none;
+    color: white;
+    padding: 0.75rem 1.5rem;
+    border-radius: 6px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+}
+
+.input-submit-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(122, 162, 247, 0.3);
+}
+
+.input-submit-btn:active {
+    transform: translateY(0);
 }
 
 .modal-overlay {
@@ -497,6 +551,7 @@ const CopyIcon = () => (<svg className="icon" style={{width: '1rem', height: '1r
 const ClearIcon = () => (<svg className="icon" style={{width: '1rem', height: '1rem'}} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>);
 const LogoutIcon = () => (<svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>);
 const GoogleIcon = () => (<svg className="icon" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>);
+const InputIcon = () => (<svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7z"></path><path d="M8 15l4-4 4 4"></path></svg>);
 
 
 // --- Language Selector Component ---
@@ -766,10 +821,34 @@ function CodeSageEditor() {
             
             if (message.type === 'output') {
                 setOutput(prev => prev + message.data);
-                // Check if the output is a prompt for input
-                if (message.data.includes("?")) { // Simple check for input prompts
+                // Enhanced input detection - check for various input prompts
+                const inputPatterns = [
+                    /.*\?.*$/m,                    // Lines ending with question marks
+                    /.*input.*:/i,                // Lines containing "input:"
+                    /.*enter.*:/i,                // Lines containing "enter:"
+                    /.*type.*:/i,                 // Lines containing "type:"
+                    /.*>>>/,                      // Python interactive prompt
+                    /.*>$/m,                      // General prompt ending with >
+                    /.*\binput\s*\(/i,           // Python input() function
+                    /.*Scanner.*next/i,           // Java Scanner
+                    /.*readline\s*\(/i,          // Node.js readline
+                    /.*cin\s*>>/i,               // C++ cin
+                    /.*scanf/i                    // C scanf
+                ];
+                
+                const shouldAwaitInput = inputPatterns.some(pattern => 
+                    pattern.test(message.data)
+                );
+                
+                // Also check if the message doesn't end with a newline (waiting for input)
+                const isWaitingForInput = !message.data.endsWith('\n') && message.data.length > 0;
+                
+                if (shouldAwaitInput || isWaitingForInput) {
                     setIsAwaitingInput(true);
                 }
+            } else if (message.type === 'input_request') {
+                // Direct input request from backend
+                setIsAwaitingInput(true);
             } else if (message.type === 'analysis') {
                 setAnalysis(prev => prev + message.data);
             } else if (message.type === 'flow') {
@@ -838,11 +917,26 @@ function CodeSageEditor() {
     
     const handleSendInput = (e) => {
         e.preventDefault();
-        if (ws.current && ws.current.readyState === WebSocket.OPEN && currentInput) {
-            ws.current.send(JSON.stringify({ type: 'input', data: currentInput }));
-            setOutput(prev => prev + currentInput + "\n");
+        if (ws.current && ws.current.readyState === WebSocket.OPEN && currentInput.trim()) {
+            ws.current.send(JSON.stringify({ type: 'input', data: currentInput.trim() + '\n' }));
+            setOutput(prev => prev + currentInput.trim() + "\n");
             setCurrentInput("");
             setIsAwaitingInput(false);
+        }
+    };
+
+    // Handle Enter key press in input field
+    const handleInputKeyPress = (e) => {
+        if (e.key === 'Enter') {
+            handleSendInput(e);
+        }
+    };
+
+    // Toggle input manually
+    const toggleInput = () => {
+        setIsAwaitingInput(!isAwaitingInput);
+        if (!isAwaitingInput) {
+            setActiveTab("output"); // Switch to output tab when opening input
         }
     };
     
@@ -931,6 +1025,15 @@ function CodeSageEditor() {
                                 <button className={`tab-button ${activeTab === 'flow' ? 'active' : ''}`} onClick={() => setActiveTab('flow')}>Flow</button>
                             </div>
                             <div className="output-controls">
+                                <button 
+                                    onClick={toggleInput} 
+                                    title={isAwaitingInput ? "Hide input" : "Send input to program"}
+                                    style={{
+                                        color: isAwaitingInput ? 'var(--accent-primary)' : 'var(--text-secondary)'
+                                    }}
+                                >
+                                    <InputIcon/>
+                                </button>
                                 <button onClick={copyToClipboard} title="Copy to clipboard"><CopyIcon/></button>
                                 <button onClick={() => { 
                                     if (activeTab === 'output') setOutput("");
@@ -944,15 +1047,24 @@ function CodeSageEditor() {
                             <>
                                 <pre className="output-content">{output}</pre>
                                 {isAwaitingInput && (
-                                    <form className="input-area" onSubmit={handleSendInput}>
+                                    <div className="input-area">
                                         <input 
                                             type="text" 
                                             value={currentInput} 
                                             onChange={(e) => setCurrentInput(e.target.value)} 
-                                            placeholder="Enter input..." 
+                                            onKeyPress={handleInputKeyPress}
+                                            placeholder="Type your input here..." 
                                             autoFocus 
                                         />
-                                    </form>
+                                        <button 
+                                            type="button" 
+                                            className="input-submit-btn"
+                                            onClick={handleSendInput}
+                                            disabled={!currentInput.trim()}
+                                        >
+                                            Send
+                                        </button>
+                                    </div>
                                 )}
                             </>
                         )}
@@ -1003,4 +1115,4 @@ function CodeSageEditor() {
     );
 }
 
-export default CodeSageEditor;
+export default CodeSageEditor;//
