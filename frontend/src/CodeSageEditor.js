@@ -12,7 +12,7 @@ import {
     signInWithPhoneNumber
 } from 'firebase/auth';
 // Firestore Imports
-import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot } from 'firebase/firestore';
+import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot, addDoc, serverTimestamp } from 'firebase/firestore';
 
 
 // --- Firebase Configuration ---
@@ -34,6 +34,27 @@ const db = getFirestore(app);
 // --- Professional CSS Styles ---
 const styles = `
 /* ... existing styles ... */
+.input-area {
+    border-top: 1px solid var(--border-color);
+    padding: 0.5rem 1rem;
+    display: flex;
+}
+
+.input-area input {
+    flex-grow: 1;
+    background-color: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    padding: 0.5rem;
+    border-radius: 4px;
+    font-family: var(--font-mono);
+}
+
+.input-area input:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+}
+
 .modal-overlay {
     position: fixed;
     top: 0;
@@ -617,6 +638,10 @@ function CodeSageEditor() {
     const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(false);
     const [workspaces, setWorkspaces] = useState([]);
     const [activeWorkspaceId, setActiveWorkspaceId] = useState('default');
+    
+    // --- NEW: State for interactive input ---
+    const [isAwaitingInput, setIsAwaitingInput] = useState(false);
+    const [currentInput, setCurrentInput] = useState("");
 
 
     const languages = [
@@ -741,6 +766,10 @@ function CodeSageEditor() {
             
             if (message.type === 'output') {
                 setOutput(prev => prev + message.data);
+                // Check if the output is a prompt for input
+                if (message.data.includes("?")) { // Simple check for input prompts
+                    setIsAwaitingInput(true);
+                }
             } else if (message.type === 'analysis') {
                 setAnalysis(prev => prev + message.data);
             } else if (message.type === 'flow') {
@@ -751,6 +780,7 @@ function CodeSageEditor() {
                 else setOutput(prev => prev + message.data);
             } else if (message.type === 'finished') {
                 setIsLoading(false);
+                setIsAwaitingInput(false);
             } else if (message.type === 'analysis_finished') {
                 setIsAnalyzing(false);
             } else if (message.type === 'flow_finished') {
@@ -763,6 +793,7 @@ function CodeSageEditor() {
             setIsLoading(false);
             setIsAnalyzing(false);
             setIsVisualizing(false);
+            setIsAwaitingInput(false);
         };
 
         ws.current.onerror = (error) => {
@@ -771,6 +802,7 @@ function CodeSageEditor() {
             setIsLoading(false);
             setIsAnalyzing(false);
             setIsVisualizing(false);
+            setIsAwaitingInput(false);
         };
     }
 
@@ -802,6 +834,16 @@ function CodeSageEditor() {
         connectWebSocket(() => {
             ws.current.send(JSON.stringify({ type: 'visualize', code, language }));
         });
+    };
+    
+    const handleSendInput = (e) => {
+        e.preventDefault();
+        if (ws.current && ws.current.readyState === WebSocket.OPEN && currentInput) {
+            ws.current.send(JSON.stringify({ type: 'input', data: currentInput }));
+            setOutput(prev => prev + currentInput + "\n");
+            setCurrentInput("");
+            setIsAwaitingInput(false);
+        }
     };
     
     const copyToClipboard = () => {
@@ -898,7 +940,22 @@ function CodeSageEditor() {
                             </div>
                         </div>
                         
-                        {activeTab === 'output' && <pre className="output-content">{output}</pre>}
+                        {activeTab === 'output' && (
+                            <>
+                                <pre className="output-content">{output}</pre>
+                                {isAwaitingInput && (
+                                    <form className="input-area" onSubmit={handleSendInput}>
+                                        <input 
+                                            type="text" 
+                                            value={currentInput} 
+                                            onChange={(e) => setCurrentInput(e.target.value)} 
+                                            placeholder="Enter input..." 
+                                            autoFocus 
+                                        />
+                                    </form>
+                                )}
+                            </>
+                        )}
                         {activeTab === 'analysis' && (
                             <div className="analysis-content">
                                 {isAnalyzing ? <LoaderIcon/> : <div dangerouslySetInnerHTML={{ __html: analysis }} />}
