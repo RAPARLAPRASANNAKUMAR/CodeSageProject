@@ -60,15 +60,21 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
         } else if ("visualize".equals(receivedMsg.type)) {
             visualizeCode(session, receivedMsg.code, receivedMsg.language);
         } else if ("input".equals(receivedMsg.type)) {
-            // NEW: Handle input from the user
+            // FIXED: Handle input from the user
             BufferedWriter writer = sessionToProcessInputMap.get(session.getId());
             if (writer != null) {
                 try {
-                    writer.write(receivedMsg.data + "\n");
+                    // Don't add extra newline - frontend already includes it
+                    writer.write(receivedMsg.data);
                     writer.flush();
+                    // Send confirmation back to frontend
+                    sendMessage(session, new ResponseMessage("input_received", ""));
                 } catch (IOException e) {
                     System.err.println("Error writing to process input stream: " + e.getMessage());
+                    sendMessage(session, new ResponseMessage("error", "Failed to send input to program"));
                 }
+            } else {
+                sendMessage(session, new ResponseMessage("error", "No active program waiting for input"));
             }
         }
     }
@@ -212,6 +218,10 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
         commandList.add(sourceFile.toAbsolutePath().toString());
         
         ProcessBuilder pb = new ProcessBuilder(commandList);
+        // IMPROVED: Set environment for better Python buffering
+        if (command[0].equals("python3")) {
+            pb.environment().put("PYTHONUNBUFFERED", "1");
+        }
         executeProcess(session, pb, tempDir);
     }
 
@@ -259,7 +269,7 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
             Process process = pb.start();
             sessionToProcessMap.put(session.getId(), process);
 
-            // NEW: Store the process's input stream writer
+            // IMPROVED: Store the process's input stream writer with proper error handling
             BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(process.getOutputStream()));
             sessionToProcessInputMap.put(session.getId(), writer);
 
@@ -286,7 +296,6 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
              e.printStackTrace();
         }
     }
-
 
     private void startStreamReader(WebSocketSession session, InputStream inputStream, String type) {
         new Thread(() -> {
@@ -320,7 +329,16 @@ public class CodeWebSocketHandler extends TextWebSocketHandler {
         if (process != null && process.isAlive()) {
             process.destroyForcibly();
         }
-        sessionToProcessInputMap.remove(sessionId);
+        
+        // FIXED: Properly close BufferedWriter
+        BufferedWriter writer = sessionToProcessInputMap.remove(sessionId);
+        if (writer != null) {
+            try {
+                writer.close();
+            } catch (IOException e) {
+                System.err.println("Error closing BufferedWriter: " + e.getMessage());
+            }
+        }
     }
 
     private synchronized void sendMessage(WebSocketSession session, ResponseMessage message) {
