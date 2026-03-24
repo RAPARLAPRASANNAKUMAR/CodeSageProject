@@ -751,8 +751,12 @@ function CodeSageEditor() {
                 
                 let snippetName = "Untitled Snippet";
                 try {
-                    const apiKey = ""; // Will be provided by the environment
-                    const apiUrl = const apiUrl = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+                    // Ensure your environment variable is actually populated here
+                    const apiKey = process.env.REACT_APP_GEMINI_API_KEY || "YOUR_FALLBACK_KEY"; 
+                    
+                    // Fixed syntax error and updated the endpoint URL
+                    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+                    
                     const requestBody = { contents: [{ parts: [{ text: namePrompt }] }] };
                     
                     const response = await fetch(apiUrl, {
@@ -763,7 +767,13 @@ function CodeSageEditor() {
                     
                     if (response.ok) {
                         const result = await response.json();
-                        snippetName = result.candidates[0].content.parts[0].text.trim();
+                        // Added safety checks for the deeply nested response
+                        if (result.candidates && result.candidates[0].content.parts[0].text) {
+                            snippetName = result.candidates[0].content.parts[0].text.trim();
+                        }
+                    } else {
+                        const errorData = await response.json();
+                        console.error("Gemini API Error:", errorData);
                     }
                 } catch (error) {
                     console.error("Error generating snippet name:", error);
@@ -1115,4 +1125,4 @@ function CodeSageEditor() {
     );
 }
 
-export default CodeSageEditor;//
+export default CodeSageEditor;
