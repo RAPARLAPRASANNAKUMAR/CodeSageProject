@@ -7,7 +7,7 @@ COPY . .
 RUN mvn -f codesage-backend/pom.xml clean install -DskipTests
 
 # Stage 2: Create the final application image with all languages installed
-FROM openjdk:17-slim
+FROM eclipse-temurin:17-jdk-jammy
 
 # Install necessary compilers and runtimes
 # The -y flag automatically answers yes to prompts
